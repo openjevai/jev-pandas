@@ -1,4 +1,11 @@
-"""A small client for the TypeSafe System One wire protocol."""
+"""A small client for the TypeSafe System One wire protocol.
+
+Supports TypeSafe (default) and OpenJEV, a free community gateway to the same
+Jev model. Provider selection: an explicit ``provider`` argument or
+``JEV_PROVIDER`` env var wins; otherwise TypeSafe if its key is set; otherwise
+OpenJEV if only ``OPENJEV_API_KEY`` is set; otherwise the TypeSafe default
+(unchanged).
+"""
 
 from __future__ import annotations
 
@@ -14,6 +21,31 @@ from typing import Any
 from urllib.parse import urlsplit
 
 import httpx
+
+# Provider defaults.
+_OPENJEV_BASE_URL = "https://api.openjev.sh/v1"
+_OPENJEV_MODEL = "openjev"
+_TYPESAFE_BASE_URL_DEFAULT = "https://api.typesafe.ai/v1"
+_TYPESAFE_MODEL_DEFAULT = "jev-latest"
+
+
+def _resolve_provider(provider: str | None) -> str:
+    """Resolve the provider: explicit choice wins; then auto-detect from env.
+
+    1. ``provider`` argument or ``JEV_PROVIDER`` env var (``openjev``/``typesafe``).
+    2. TypeSafe if ``TYPESAFE_API_KEY`` is set (and not ``dummy``) — default unchanged.
+    3. OpenJEV if only ``OPENJEV_API_KEY`` is set.
+    4. TypeSafe default (unchanged).
+    """
+    explicit = (provider or os.getenv("JEV_PROVIDER", "")).strip().lower() or None
+    if explicit in ("openjev", "typesafe"):
+        return explicit
+    typesafe_key = os.getenv("TYPESAFE_API_KEY", "")
+    if typesafe_key and typesafe_key != "dummy":
+        return "typesafe"
+    if os.getenv("OPENJEV_API_KEY", ""):
+        return "openjev"
+    return "typesafe"
 
 
 class JevError(RuntimeError):
@@ -77,14 +109,24 @@ class JevClient:
         api_key: str | None = None,
         model: str | None = None,
         *,
+        provider: str | None = None,
         timeout: float = 20,
         retries: int = 2,
         cache_size: int = 10_000,
         transport: httpx.BaseTransport | None = None,
     ):
-        self.base_url = (
-            base_url or os.getenv("TYPESAFE_BASE_URL", "https://api.typesafe.ai/v1")
-        ).rstrip("/")
+        chosen_provider = _resolve_provider(provider)
+        if chosen_provider == "openjev":
+            default_base = _OPENJEV_BASE_URL
+            default_model = _OPENJEV_MODEL
+            default_key = os.getenv("OPENJEV_API_KEY", "") or os.getenv(
+                "TYPESAFE_API_KEY", "dummy"
+            )
+        else:
+            default_base = os.getenv("TYPESAFE_BASE_URL", _TYPESAFE_BASE_URL_DEFAULT)
+            default_model = os.getenv("TYPESAFE_MODEL", _TYPESAFE_MODEL_DEFAULT)
+            default_key = os.getenv("TYPESAFE_API_KEY", "dummy")
+        self.base_url = (base_url or default_base).rstrip("/")
         parsed = urlsplit(self.base_url)
         if (
             parsed.scheme not in {"http", "https"}
@@ -97,14 +139,14 @@ class JevClient:
             raise ValueError("Use api_key rather than credentials in the URL")
         if retries < 0 or cache_size < 0 or timeout <= 0:
             raise ValueError("Invalid timeout, retry count, or cache size")
-        self.model = model or os.getenv("TYPESAFE_MODEL", "jev-latest")
+        self.model = model or default_model
         self.retries = retries
         self.cache_size = cache_size
         self._cache: OrderedDict[str, dict] = OrderedDict()
         self._lock = threading.Lock()
         self._http = httpx.Client(
             headers={
-                "Authorization": f"Bearer {api_key or os.getenv('TYPESAFE_API_KEY', 'dummy')}"
+                "Authorization": f"Bearer {api_key or default_key}"
             },
             timeout=timeout,
             transport=transport,
@@ -151,6 +193,7 @@ class JevClient:
                 response.raise_for_status()
             except httpx.HTTPStatusError as exc:
                 status = exc.response.status_code
+                # Retry 429, 500, 503, 529, and other 5xx; raise on other 4xx.
                 if status != 429 and status < 500:
                     raise JevError(
                         f"Endpoint returned HTTP {status}; check the model and credentials"

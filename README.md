@@ -4,6 +4,8 @@ Explore a pandas dataframe using natural-language judgments from [Jev](https://d
 (TypeSafe System One) compatible endpoints. Find incidents by meaning, classify records, or score
 them against a rubric — from a notebook or a script. No generative chat model needed.
 
+> **OpenJEV support:** Jev is built by [TypeSafe](https://typesafe.ai). This fork keeps TypeSafe as the default and adds optional support for [OpenJEV](https://openjev.sh), a free community gateway to the same Jev model — set `OPENJEV_API_KEY` (or `JEV_PROVIDER=openjev`) to use it. Original project: https://github.com/yalindogusahin/jev-pandas by @yalindogusahin.
+
 ```mermaid
 flowchart LR
     DF["pandas DataFrame"] --> JF["JevFrame(df, client)"]
@@ -36,6 +38,20 @@ export TYPESAFE_MODEL=jev-latest
 `TYPESAFE_BASE_URL` and `TYPESAFE_MODEL` default to the official Jev endpoint
 (`https://api.typesafe.ai/v1`, `jev-latest`). Any TypeSafe System One compatible endpoint works;
 pass `base_url`, `api_key`, and `model` to `JevClient` to override.
+
+### OpenJEV (optional)
+
+To use [OpenJEV](https://openjev.sh), a free community gateway to the same Jev model, set
+`OPENJEV_API_KEY` or `JEV_PROVIDER=openjev`. TypeSafe stays the default when its key is set;
+OpenJEV is selected automatically if only `OPENJEV_API_KEY` is present.
+
+```bash
+export OPENJEV_API_KEY=your-openjev-key
+# or explicitly:
+export JEV_PROVIDER=openjev
+```
+
+You can also pass `provider="openjev"` to `JevClient` directly.
 
 For notebook work (JupyterLab, ipykernel, and the optional `tqdm_progress()` bar), install the
 `notebook` extra as well: `uv sync --extra dev --extra notebook`.
@@ -118,7 +134,7 @@ Each question produces `{name}_{field}` columns: `access_probability`, `topic_la
 
 Rows run sequentially by default (`workers=1`); pass `workers=N` to evaluate them concurrently
 with a thread pool. Results are always assembled in the original row order, and a failed row never
-affects the others. The client retries transient network errors, HTTP 429, and server errors;
+affects the others. The client retries transient network errors, HTTP 429, 503, and other server errors;
 failures are never turned into negative predictions. Identical successful requests are cached in
 memory (up to 10,000 entries per client/session), guarded by a lock so parallel runs are safe.
 Changing the instruction, selected data, endpoint, or requested model invalidates the relevant
